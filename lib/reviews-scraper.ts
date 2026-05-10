@@ -175,7 +175,71 @@ function inferReviewerHandle(block: string) {
 }
 
 function cleanReviewContent(block: string) {
-  return block.replace(/\s+/g, " ").trim();
+  const lines = block
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const cleanedLines: string[] = [];
+  let skipHeader = true;
+
+  for (const line of lines) {
+    // Drop avatar/media markdown and Product Hunt profile/product links.
+    if (/^!\[[^\]]*\]\([^)]+\)$/.test(line)) continue;
+    if (/^\[[^\]]+\]\(https:\/\/www\.producthunt\.com\/@[^)]+\)/i.test(line)) continue;
+    if (/^\[[^\]]+\]\(https:\/\/www\.producthunt\.com\/products\/[^)]+\)/i.test(line)) continue;
+
+    // Drop obvious UI/meta noise.
+    if (/^Helpful(\s*\(\d+\))?$/i.test(line)) continue;
+    if (/^Share$/i.test(line)) continue;
+    if (/^Report$/i.test(line)) continue;
+    if (/^\d+\s+views/i.test(line)) continue;
+    if (/^\d+(mo|yr|d|h)\s+ago$/i.test(line)) continue;
+    if (/^Ratings$/i.test(line)) continue;
+    if (/^(Ease of use|Reliability|Value for money|Customization)$/i.test(line)) continue;
+
+    // Section headings are useful, keep normalized.
+    if (/^###\s*What's great/i.test(line)) {
+      cleanedLines.push("What's great:");
+      skipHeader = false;
+      continue;
+    }
+    if (/^###\s*What needs improvement/i.test(line)) {
+      cleanedLines.push("What needs improvement:");
+      skipHeader = false;
+      continue;
+    }
+    if (/^###\s*vs Alternatives/i.test(line)) {
+      cleanedLines.push("Vs alternatives:");
+      skipHeader = false;
+      continue;
+    }
+
+    // Skip top profile/header rows before review body starts.
+    if (
+      skipHeader &&
+      (/•\s*\[\d+\s+reviews?\]/i.test(line) ||
+        /\[[^\]]+\]\(https:\/\/www\.producthunt\.com\/@[^)]+\)/i.test(line))
+    ) {
+      continue;
+    }
+
+    skipHeader = false;
+    cleanedLines.push(line);
+  }
+
+  const text = cleanedLines.join("\n")
+    // Convert markdown links to text.
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, "$1")
+    // Drop any remaining URLs.
+    .replace(/https?:\/\/\S+/g, " ")
+    // Collapse duplicated spaces.
+    .replace(/[ \t]+/g, " ")
+    // Remove repeated punctuation artifacts.
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .trim();
+
+  return text;
 }
 
 function hashText(text: string) {
@@ -262,7 +326,7 @@ async function scrapeCompetitorReviews(sourceUrl: string, apiKey: string, userId
       scrapedAt,
       contentHash: hashText(content),
     };
-  });
+  }).filter((r) => r.content.length > 40);
 
   return {
     pagesScraped: pagesToScrape.length,

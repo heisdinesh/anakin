@@ -18,6 +18,8 @@ export async function GET(_request: Request, { params }: { params: Promise<{ job
     input: job.input,
     result: job.result ?? null,
     error: job.error ?? null,
+    fallbackUsed: job.fallbackUsed ?? false,
+    fallbackReason: job.fallbackReason ?? null,
     metrics: job.result
       ? {
           competitors_analysed: job.result.competitors.length,

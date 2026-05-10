@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 type AnalysisResult = {
@@ -44,6 +45,8 @@ type CompetitorJobResponse = {
   progressMessage: string;
   result: AnalysisResult | null;
   error: string | null;
+  fallbackUsed?: boolean;
+  fallbackReason?: string | null;
   metrics: {
     competitors_analysed: number;
     features_suggested: number;
@@ -104,12 +107,47 @@ type ComparisonResponse = {
   error?: string;
 };
 
+type ActionStatus = "todo" | "inprogress" | "done";
+type ProductAction = {
+  _id: string;
+  userId: string;
+  source: "reviews" | "competitor_analysis";
+  competitorKey: string;
+  competitorName: string;
+  title: string;
+  insight: string;
+  priority: "High" | "Medium" | "Low";
+  sentimentLabel: "positive" | "neutral" | "negative";
+  status: ActionStatus;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type ActionsListResponse = {
+  status: string;
+  count: number;
+  actions: ProductAction[];
+  error?: string;
+};
+
+type ActionsJobResponse = {
+  id: string;
+  userId: string;
+  status: "pending" | "processing" | "completed" | "error";
+  progressMessage: string;
+  reviewsScanned: number;
+  analysisSuggestionsScanned: number;
+  actionsCreated: number;
+  error?: string;
+};
+
 const POLL_MS = 2500;
-const COLORS = ["#2563eb", "#16a34a", "#f59e0b", "#7c3aed", "#ef4444", "#0891b2"];
 const USER_ID_KEY = "trackleafUserId";
 const UI_STATE_KEY = "trackleafUiState";
 
-type Section = "competitor" | "reviews" | "comparison";
+type Section = "competitor" | "reviews" | "comparison" | "actions";
+type VoiceTab = "feedback" | "priorities";
+type FeatureSuggestion = AnalysisResult["featureSuggestions"][number];
 
 type PersistedUiState = Partial<{
   urls: string[];
@@ -122,6 +160,7 @@ type PersistedUiState = Partial<{
   reviewsTotalPages: number;
   reviewsCompetitor: string;
   comparison: ComparisonResponse | null;
+  actions: ProductAction[];
 }>;
 
 function readSavedState(): PersistedUiState {
@@ -206,6 +245,7 @@ export default function Home() {
 }
 
 export function TrackleafDashboard({ initialSection }: { initialSection: Section }) {
+  const router = useRouter();
   const savedState = useMemo(() => readSavedState(), []);
   const activeSection = initialSection;
 
@@ -215,7 +255,7 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
     "https://www.atlassian.com/software/jira",
   ]);
   const [urlInput, setUrlInput] = useState("");
-  const [context, setContext] = useState(savedState.context ?? "We are building Trackleaf, a project management tool for small engineering teams.");
+  const [context, setContext] = useState(savedState.context ?? "We are building Trackleaf. Help us identify customer pain, market gaps, and what to build next.");
   const [loading, setLoading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [job, setJob] = useState<CompetitorJobResponse | null>(savedState.job ?? null);
@@ -233,6 +273,15 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
   const [comparisonLoading, setComparisonLoading] = useState(false);
   const [comparisonError, setComparisonError] = useState<string | null>(null);
   const [comparison, setComparison] = useState<ComparisonResponse | null>(savedState.comparison ?? null);
+  const [actions, setActions] = useState<ProductAction[]>(savedState.actions ?? []);
+  const [actionsJob, setActionsJob] = useState<ActionsJobResponse | null>(null);
+  const [actionsLoading, setActionsLoading] = useState(false);
+  const [actionsError, setActionsError] = useState<string | null>(null);
+  const [voiceTab, setVoiceTab] = useState<VoiceTab>(initialSection === "reviews" ? "feedback" : "priorities");
+  const [featureModalOpen, setFeatureModalOpen] = useState(false);
+  const [featureChoices, setFeatureChoices] = useState<Array<{ selected: boolean; item: FeatureSuggestion }>>([]);
+  const [featureActionLoading, setFeatureActionLoading] = useState(false);
+  const [featureActionError, setFeatureActionError] = useState<string | null>(null);
 
   function getOrCreateUserId() {
     const existingUserId = localStorage.getItem(USER_ID_KEY);
@@ -260,9 +309,10 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
         reviewsTotalPages,
         reviewsCompetitor,
         comparison,
+        actions,
       }),
     );
-  }, [urls, context, job, reviewsUrls, reviews, reviewsJob, reviewsPage, reviewsTotalPages, reviewsCompetitor, comparison]);
+  }, [urls, context, job, reviewsUrls, reviews, reviewsJob, reviewsPage, reviewsTotalPages, reviewsCompetitor, comparison, actions]);
 
   const competitorOptions = useMemo(() => {
     const map = new Map<string, string>();
@@ -294,8 +344,50 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
       }
 
       setJob(body);
-      if (body.status === "completed" || body.status === "error") done = true;
+      if (body.status === "completed") {
+        done = true;
+        const suggestions = body.result?.featureSuggestions ?? [];
+        if (suggestions.length > 0) {
+          setFeatureChoices(suggestions.map((item) => ({ selected: true, item })));
+          setFeatureActionError(null);
+          setFeatureModalOpen(true);
+        }
+      } else if (body.status === "error") {
+        done = true;
+      }
       else await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+    }
+  }
+
+  async function onCreateActionsFromSelectedFeatures() {
+    const selected = featureChoices.filter((c) => c.selected).map((c) => c.item);
+    if (!selected.length) {
+      setFeatureActionError("Select at least one feature.");
+      return;
+    }
+
+    const userId = getOrCreateUserId();
+    setFeatureActionLoading(true);
+    setFeatureActionError(null);
+    try {
+      const res = await fetch("/api/actions/from-features", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, suggestions: selected }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setFeatureActionError(body.error ?? "Failed to create actions.");
+        return;
+      }
+
+      setFeatureModalOpen(false);
+      await loadActions();
+      router.push("/actions");
+    } catch (error) {
+      setFeatureActionError(error instanceof Error ? error.message : "Failed to create actions.");
+    } finally {
+      setFeatureActionLoading(false);
     }
   }
 
@@ -409,6 +501,74 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
     }
   }, []);
 
+  const loadActions = useCallback(async () => {
+    const userId = getOrCreateUserId();
+    const res = await fetch(`/api/actions?userId=${encodeURIComponent(userId)}`, { cache: "no-store" });
+    const body = (await res.json()) as ActionsListResponse;
+    if (!res.ok) {
+      setActionsError(body.error ?? "Failed to load actions");
+      return;
+    }
+    setActions(body.actions ?? []);
+  }, []);
+
+  async function startActionsPolling(jobId: string) {
+    let done = false;
+    while (!done) {
+      const res = await fetch(`/api/actions/generate/${jobId}`, { cache: "no-store" });
+      const body = (await res.json()) as ActionsJobResponse & { error?: string };
+      if (!res.ok) {
+        setActionsError(body.error ?? "Polling failed.");
+        return;
+      }
+      setActionsJob(body);
+      if (body.status === "completed") {
+        done = true;
+        await loadActions();
+      } else if (body.status === "error") {
+        done = true;
+        setActionsError(body.error ?? "Action generation failed.");
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+      }
+    }
+  }
+
+  async function onGenerateActions() {
+    const userId = getOrCreateUserId();
+    setActionsLoading(true);
+    setActionsError(null);
+    setActionsJob(null);
+    try {
+      const res = await fetch("/api/actions/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setActionsError(body.error ?? "Failed to start action generation.");
+        return;
+      }
+      await startActionsPolling(body.jobId);
+    } catch (error) {
+      setActionsError(error instanceof Error ? error.message : "Something went wrong.");
+    } finally {
+      setActionsLoading(false);
+    }
+  }
+
+  async function onChangeActionStatus(actionId: string, status: ActionStatus) {
+    const userId = getOrCreateUserId();
+    const res = await fetch(`/api/actions/${actionId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, status }),
+    });
+    if (!res.ok) return;
+    await loadActions();
+  }
+
   useEffect(() => {
     if (activeSection === "comparison" && !comparison && !comparisonLoading) {
       void loadComparison();
@@ -438,29 +598,26 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
     <div className="min-h-screen bg-slate-100 text-slate-900">
       <main className="flex w-full">
         <aside className="fixed left-0 top-0 hidden h-screen w-72 shrink-0 border-r border-slate-200 bg-white p-5 lg:block">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Workspace</h2>
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Decision Engine</h2>
           <nav className="mt-4 grid gap-2 text-sm">
             <Link href="/competitor-analysis" className={`rounded-lg px-3 py-2 text-left font-medium ${activeSection === "competitor" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
-              Competitor Analysis
+              Market Gap Analysis
             </Link>
             <Link href="/reviews" className={`rounded-lg px-3 py-2 text-left font-medium ${activeSection === "reviews" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
-              Reviews
+              Voice of Customer
             </Link>
-            <Link href="/comparison" className={`rounded-lg px-3 py-2 text-left font-medium ${activeSection === "comparison" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
-              Comparison
+            <Link href="/actions" className={`rounded-lg px-3 py-2 text-left font-medium ${activeSection === "actions" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
+              Actions
             </Link>
           </nav>
-          <div className="mt-6 text-xs text-slate-500">
-            <Link href="/competitor-analysis">Trackleaf</Link>
-          </div>
         </aside>
 
         <div className="flex min-w-0 flex-1 flex-col gap-8 p-6 lg:ml-72">
           {activeSection === "competitor" && (
             <>
               <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <h1 className="text-2xl font-semibold">Async Trackleaf (Anakin)</h1>
-                <p className="mt-2 text-sm text-slate-600">Add competitor URLs, start analysis, and view results live via polling.</p>
+                <h1 className="text-2xl font-semibold">Market Gap Analysis</h1>
+                <p className="mt-2 text-sm text-slate-600">Building is easy. Deciding what to build is hard. Analyze market signals and turn them into execution-ready feature priorities.</p>
 
                 <form className="mt-6 grid gap-4" onSubmit={onSubmit}>
                   <label className="grid gap-1">
@@ -500,7 +657,7 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
                   </label>
 
                   <button type="submit" disabled={loading} className="rounded-lg bg-slate-900 px-4 py-3 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60">
-                    {loading ? "Running analysis..." : "Start Analysis"}
+                    {loading ? "Analyzing market signals..." : "Generate Build Priorities"}
                   </button>
                 </form>
               </section>
@@ -524,10 +681,17 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
                     </div>
                   )}
 
+                  {job.fallbackUsed && (
+                    <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                      LLM call failed, so fallback analysis was used.
+                      {job.fallbackReason ? ` Reason: ${job.fallbackReason}` : ""}
+                    </div>
+                  )}
+
                   {job.result && (
                     <div className="mt-6 grid gap-6">
                       <div>
-                        <h2 className="text-lg font-semibold">Feature Suggestions</h2>
+                        <h2 className="text-lg font-semibold">What We Should Build Next</h2>
                         <p className="mt-1 text-sm text-slate-600">Recommended actions based on competitor gaps and opportunities.</p>
                         <div className="mt-3 grid gap-3">
                           {job.result.featureSuggestions.map((f, idx) => (
@@ -541,7 +705,7 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
                       </div>
 
                       <div>
-                        <h2 className="text-lg font-semibold">Competitor Analysis Matrix</h2>
+                        <h2 className="text-lg font-semibold">Competitive Decision Matrix</h2>
                         <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200">
                           <table className="min-w-full text-sm">
                             <thead className="bg-slate-50 text-left">
@@ -571,12 +735,12 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
                       </div>
 
                       <div>
-                        <h2 className="text-lg font-semibold">Summary</h2>
+                        <h2 className="text-lg font-semibold">Market Narrative</h2>
                         <p className="mt-2 text-sm text-slate-700">{job.result.summary || "No summary returned."}</p>
                       </div>
 
                       <div>
-                        <h2 className="text-lg font-semibold">Competitors (Reference)</h2>
+                        <h2 className="text-lg font-semibold">Competitors (Reference Only)</h2>
                         <div className="mt-3 flex flex-wrap gap-2">
                           {job.result.competitors.map((c, idx) => (
                             <span key={`${c.url}_${idx}`} className="rounded-full border border-slate-300 bg-slate-50 px-3 py-1 text-sm text-slate-800">
@@ -602,9 +766,32 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
           {activeSection === "reviews" && (
             <>
               <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <h1 className="text-2xl font-semibold">Product Hunt Reviews</h1>
-                <p className="mt-2 text-sm text-slate-600">Enter multiple competitor Product Hunt review URLs, scrape asynchronously, run sentiment analysis, and store results in MongoDB.</p>
+                <h1 className="text-2xl font-semibold">Voice of Customer</h1>
+                <p className="mt-2 text-sm text-slate-600">Capture what customers are actually saying across competitor review pages and convert noise into product intelligence.</p>
+                <div className="mt-4 inline-flex rounded-lg border border-slate-300 bg-slate-50 p-1 text-sm">
+                  <button
+                    type="button"
+                    onClick={() => setVoiceTab("feedback")}
+                    className={`rounded-md px-3 py-1.5 ${voiceTab === "feedback" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"}`}
+                  >
+                    Feedback
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVoiceTab("priorities");
+                      void loadComparison();
+                      void loadActions();
+                    }}
+                    className={`rounded-md px-3 py-1.5 ${voiceTab === "priorities" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"}`}
+                  >
+                    Build Priorities
+                  </button>
+                </div>
+              </section>
 
+              {voiceTab === "feedback" && (
+                <>
                 <div className="mt-6 grid gap-4">
                   <div className="rounded-lg border border-slate-300 bg-white p-3">
                     <div className="mb-2 flex flex-wrap gap-2">
@@ -636,14 +823,13 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
 
                   <div className="flex flex-wrap gap-3">
                     <button type="button" onClick={onStartReviewsScrape} disabled={reviewsLoading || reviewsUrls.length === 0} className="rounded-lg bg-slate-900 px-4 py-3 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60">
-                      {reviewsLoading ? "Scraping..." : "Start Reviews Scrape"}
+                      {reviewsLoading ? "Collecting customer signals..." : "Collect Customer Signals"}
                     </button>
                     <button type="button" onClick={() => void loadStoredReviews(1)} className="rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm font-medium text-slate-700 hover:bg-slate-50">
-                      Refresh Stored Reviews
+                      Refresh Insights
                     </button>
                   </div>
                 </div>
-              </section>
 
               {reviewsError && <section className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{reviewsError}</section>}
 
@@ -668,7 +854,7 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
 
               <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <h2 className="text-lg font-semibold">Stored Reviews ({reviews.length})</h2>
+                  <h2 className="text-lg font-semibold">Captured Customer Feedback ({reviews.length})</h2>
                   <div className="flex flex-wrap items-center gap-2">
                     <select
                       value={reviewsCompetitor}
@@ -706,54 +892,94 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
                   ))}
                 </div>
               </section>
-            </>
-          )}
+                </>
+              )}
 
-          {activeSection === "comparison" && (
-            <>
-              <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h1 className="text-2xl font-semibold">Comparison Dashboard</h1>
-                    <p className="mt-2 text-sm text-slate-600">Mentions and sentiment trends across Product Hunt competitors.</p>
-                  </div>
-                  <button type="button" onClick={() => void loadComparison()} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Refresh</button>
-                </div>
-              </section>
-
-              {comparisonError && <section className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{comparisonError}</section>}
-              {comparisonLoading && <section className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-600">Loading comparison...</section>}
-
-              {comparison && (
+              {voiceTab === "priorities" && (
                 <>
                   <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                    <div className="grid gap-3 sm:grid-cols-4">
-                      <div className="rounded-lg bg-slate-50 p-4 text-sm">Total Mentions: {comparison.totalMentions}</div>
-                      <div className="rounded-lg bg-slate-50 p-4 text-sm">Competitors: {comparison.competitors.length}</div>
-                      <div className="rounded-lg bg-slate-50 p-4 text-sm">Top by Mentions: {comparison.competitors.sort((a, b) => b.mentions - a.mentions)[0]?.competitorName || comparison.competitors.sort((a, b) => b.mentions - a.mentions)[0]?.competitorKey || "-"}</div>
-                      <div className="rounded-lg bg-slate-50 p-4 text-sm">Best Positive %: {comparison.competitors.sort((a, b) => b.positivePct - a.positivePct)[0]?.competitorName || comparison.competitors.sort((a, b) => b.positivePct - a.positivePct)[0]?.competitorKey || "-"}</div>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <h2 className="text-xl font-semibold">Build Priorities Dashboard</h2>
+                        <p className="mt-1 text-sm text-slate-600">Use sentiment + market signals to decide what developers should build next.</p>
+                      </div>
+                      <button type="button" onClick={() => void loadComparison()} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Refresh</button>
                     </div>
                   </section>
 
+                  {comparisonError && <section className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{comparisonError}</section>}
+                  {comparisonLoading && <section className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-600">Loading comparison...</section>}
+
+                  {comparison && (
+                    <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                      <h2 className="text-lg font-semibold">Demand by Competitor (Segmented by Sentiment)</h2>
+                      <div className="mt-4">
+                        <ReviewsBarChart competitors={comparison.competitors} />
+                      </div>
+                    </section>
+                  )}
+
                   <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                    <h2 className="text-lg font-semibold">Total Reviews by Company</h2>
-                    <div className="mt-4">
-                      <ReviewsBarChart competitors={comparison.competitors} />
+                    <h2 className="text-lg font-semibold">Execution Actions</h2>
+                    <p className="mt-1 text-sm text-slate-600">Generate actions from both review sentiment and competitor-analysis priorities.</p>
+                    <div className="mt-4 flex flex-wrap gap-3">
+                      <button type="button" onClick={onGenerateActions} disabled={actionsLoading} className="rounded-lg bg-slate-900 px-4 py-3 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60">
+                        {actionsLoading ? "Generating actions..." : "Generate Actions"}
+                      </button>
+                      <button type="button" onClick={() => void loadActions()} className="rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                        Refresh Actions
+                      </button>
                     </div>
                   </section>
 
+                  {actionsError && (
+                    <section className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{actionsError}</section>
+                  )}
+
+                  {actionsJob && (
+                    <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide">
+                          {(actionsJob.status === "pending" || actionsJob.status === "processing") && <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-400 border-t-transparent" />}
+                          {actionsJob.status}
+                        </span>
+                        <span className="text-sm text-slate-600">{actionsJob.progressMessage}</span>
+                      </div>
+                      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                        <div className="rounded-lg bg-slate-50 p-3 text-sm">Reviews Scanned: {actionsJob.reviewsScanned}</div>
+                        <div className="rounded-lg bg-slate-50 p-3 text-sm">Analysis Suggestions Scanned: {actionsJob.analysisSuggestionsScanned}</div>
+                        <div className="rounded-lg bg-slate-50 p-3 text-sm">Actions Created: {actionsJob.actionsCreated}</div>
+                      </div>
+                    </section>
+                  )}
+
                   <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                    <h2 className="text-lg font-semibold">Competitor Breakdown</h2>
-                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                      {comparison.competitors.map((competitor, idx) => (
-                        <article key={competitor.competitorKey} className="rounded-lg border border-slate-200 p-4">
-                          <div className="flex items-center gap-2">
-                            <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: COLORS[idx % COLORS.length] }} />
-                            <h3 className="font-semibold">{competitor.competitorName || competitor.competitorKey}</h3>
+                    <h2 className="text-lg font-semibold">Action List</h2>
+                    <div className="mt-4 grid gap-3">
+                      {actions.length === 0 && (
+                        <p className="text-sm text-slate-600">No actions yet. Generate actions to see prioritized work items.</p>
+                      )}
+                      {actions.map((action) => (
+                        <article key={action._id} className="rounded-lg border border-slate-200 bg-white p-4">
+                          <div className="flex flex-wrap items-center gap-2 text-xs">
+                            <span className="rounded bg-slate-100 px-2 py-1">{action.source === "reviews" ? "Review Signal" : "Build Priority Signal"}</span>
+                            <span className="rounded bg-slate-100 px-2 py-1">{action.competitorName}</span>
+                            <span className="rounded bg-slate-100 px-2 py-1">Priority: {action.priority}</span>
                           </div>
-                          <p className="mt-2 text-sm text-slate-700">Mentions: {competitor.mentions}</p>
-                          <p className="mt-1 text-sm text-slate-700">Positive: {competitor.positive} | Neutral: {competitor.neutral} | Negative: {competitor.negative}</p>
-                          <p className="mt-1 text-sm text-slate-700">Positive %: {competitor.positivePct}%</p>
+                          <p className="mt-2 text-sm font-medium text-slate-900">{action.title}</p>
+                          <p className="mt-1 text-sm text-slate-700">{action.insight}</p>
+                          <div className="mt-3 flex items-center gap-3">
+                            <label className="text-xs text-slate-500">Status</label>
+                            <select
+                              value={action.status}
+                              onChange={(e) => void onChangeActionStatus(action._id, e.target.value as ActionStatus)}
+                              className="rounded border border-slate-300 px-2 py-1 text-xs"
+                            >
+                              <option value="todo">todo</option>
+                              <option value="inprogress">inprogress</option>
+                              <option value="done">done</option>
+                            </select>
+                          </div>
                         </article>
                       ))}
                     </div>
@@ -762,8 +988,121 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
               )}
             </>
           )}
+
+          {activeSection === "actions" && (
+            <>
+              {actionsError && (
+                <section className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{actionsError}</section>
+              )}
+
+              {actionsJob && (
+                <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide">
+                      {(actionsJob.status === "pending" || actionsJob.status === "processing") && <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-400 border-t-transparent" />}
+                      {actionsJob.status}
+                    </span>
+                    <span className="text-sm text-slate-600">{actionsJob.progressMessage}</span>
+                  </div>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-lg bg-slate-50 p-3 text-sm">Reviews Scanned: {actionsJob.reviewsScanned}</div>
+                    <div className="rounded-lg bg-slate-50 p-3 text-sm">Analysis Suggestions Scanned: {actionsJob.analysisSuggestionsScanned}</div>
+                    <div className="rounded-lg bg-slate-50 p-3 text-sm">Actions Created: {actionsJob.actionsCreated}</div>
+                  </div>
+                </section>
+              )}
+
+              <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <h2 className="text-lg font-semibold">Action List</h2>
+                <div className="mt-4 grid gap-3">
+                  {actions.length === 0 && (
+                    <p className="text-sm text-slate-600">No actions yet. Generate actions to see prioritized work items.</p>
+                  )}
+                  {actions.map((action) => (
+                    <article key={action._id} className="rounded-lg border border-slate-200 bg-white p-4">
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <span className="rounded bg-slate-100 px-2 py-1">{action.source === "reviews" ? "Review Signal" : "Build Priority Signal"}</span>
+                        <span className="rounded bg-slate-100 px-2 py-1">{action.competitorName}</span>
+                        <span className="rounded bg-slate-100 px-2 py-1">Priority: {action.priority}</span>
+                      </div>
+                      <p className="mt-2 text-sm font-medium text-slate-900">{action.title}</p>
+                      <p className="mt-1 text-sm text-slate-700">{action.insight}</p>
+                      <div className="mt-3 flex items-center gap-3">
+                        <label className="text-xs text-slate-500">Status</label>
+                        <select
+                          value={action.status}
+                          onChange={(e) => void onChangeActionStatus(action._id, e.target.value as ActionStatus)}
+                          className="rounded border border-slate-300 px-2 py-1 text-xs"
+                        >
+                          <option value="todo">todo</option>
+                          <option value="inprogress">inprogress</option>
+                          <option value="done">done</option>
+                        </select>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            </>
+          )}
         </div>
       </main>
+
+      {featureModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4">
+          <div className="max-h-[85vh] w-full max-w-3xl overflow-hidden rounded-2xl bg-white shadow-xl">
+            <div className="border-b border-slate-200 p-5">
+              <h2 className="text-xl font-semibold">Build Priorities Ready</h2>
+              <p className="mt-1 text-sm text-slate-600">Select the features you want to convert into actions.</p>
+            </div>
+
+            <div className="max-h-[55vh] overflow-y-auto p-5">
+              <div className="grid gap-3">
+                {featureChoices.map((choice, idx) => (
+                  <label key={`${choice.item.feature}_${idx}`} className="flex items-start gap-3 rounded-lg border border-slate-200 p-3">
+                    <input
+                      type="checkbox"
+                      className="mt-1"
+                      checked={choice.selected}
+                      onChange={(e) => {
+                        const next = [...featureChoices];
+                        next[idx] = { ...next[idx], selected: e.target.checked };
+                        setFeatureChoices(next);
+                      }}
+                    />
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">{choice.item.feature}</p>
+                      <p className="mt-1 text-sm text-slate-700">{choice.item.rationale}</p>
+                      <p className="mt-1 text-xs text-slate-500">Priority: {choice.item.priority} | Inspiration: {choice.item.inspiration}</p>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 p-5">
+              {featureActionError ? <p className="text-sm text-red-600">{featureActionError}</p> : <div />}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                  onClick={() => setFeatureModalOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void onCreateActionsFromSelectedFeatures()}
+                  disabled={featureActionLoading}
+                  className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {featureActionLoading ? "Creating..." : "Create Actions"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

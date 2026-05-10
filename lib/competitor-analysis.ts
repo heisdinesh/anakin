@@ -61,6 +61,8 @@ export type AnalysisJob = {
   progressMessage: string;
   result?: CompetitorAnalysisResult;
   error?: string;
+  fallbackUsed?: boolean;
+  fallbackReason?: string;
 };
 
 type ScrapedSite = {
@@ -72,6 +74,15 @@ const jobs = new Map<string, AnalysisJob>();
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function logStep(jobId: string, step: string, details?: unknown) {
+  const prefix = `[competitor-analysis][${jobId}] ${step}`;
+  if (details === undefined) {
+    console.info(prefix);
+    return;
+  }
+  console.info(prefix, details);
 }
 
 function toJobId() {
@@ -337,6 +348,55 @@ async function analyzeWithAnakin(payload: { model: string; prompt: string; apiKe
   throw new Error(`Anakin completion failed across endpoints: ${errors.join(" | ")}`);
 }
 
+function extractJsonObject(input: string) {
+  const trimmed = input.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fenced?.[1]?.trim() ?? trimmed;
+  const start = candidate.indexOf("{");
+  const end = candidate.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error("No JSON object found in model response");
+  }
+  return candidate.slice(start, end + 1);
+}
+
+async function analyzeWithGeminiDirect(payload: { model: string; prompt: string; apiKey: string }): Promise<CompetitorAnalysisResult> {
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(payload.model)}:generateContent?key=${encodeURIComponent(payload.apiKey)}`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: `${payload.prompt}\n\nIMPORTANT: Return strict JSON only.` }],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.3,
+      },
+    }),
+  });
+
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(`Gemini direct failed: ${response.status} ${JSON.stringify(body)}`);
+  }
+
+  const text =
+    body?.candidates?.[0]?.content?.parts
+      ?.map((p: { text?: string }) => p?.text ?? "")
+      .join("\n")
+      ?.trim() ?? "";
+  if (!text) {
+    throw new Error("Gemini direct returned empty content");
+  }
+
+  const jsonText = extractJsonObject(text);
+  const parsed = JSON.parse(jsonText);
+  return normalizeResult(parsed);
+}
+
 function inferCategory(blob: string): string {
   const t = blob.toLowerCase();
   if (/(project|issue|sprint|roadmap|task)/.test(t)) return "Project Management";
@@ -457,19 +517,34 @@ async function runJob(jobId: string) {
     jobs.set(jobId, { ...current, ...patch, updatedAt: nowIso() });
   };
 
+  logStep(jobId, "job_started", {
+    urls: job.input.urls.length,
+    model: job.input.model ?? "gemini-2.5-flash",
+    hasContext: Boolean(job.input.context?.trim()),
+  });
   mark({ status: "processing", progressMessage: "Fetching competitor websites..." });
 
   try {
     const apiKey = await getEnvValue("ANAKIN_API_KEY");
     if (!apiKey) throw new Error("Missing ANAKIN_API_KEY (.env.local, .env, or ../.env)");
+    logStep(jobId, "anakin_api_key_loaded");
 
     const fetched = await Promise.all(
       job.input.urls.map(async (url) => {
+        logStep(jobId, "scrape_start", { url });
         const scraped = await scrapeWithAnakin(url, apiKey);
-        if (scraped) return { url, text: scraped };
+        if (scraped) {
+          logStep(jobId, "scrape_done_anakin", { url, chars: scraped.length });
+          return { url, text: scraped };
+        }
+        logStep(jobId, "scrape_fallback_html", { url });
         return fetchWebsiteText(url);
       }),
     );
+    logStep(jobId, "fetch_complete", {
+      urls: fetched.length,
+      chars: fetched.reduce((sum, item) => sum + item.text.length, 0),
+    });
 
     const sitesText = fetched
       .map(({ url, text }) => `\n\n=== WEBSITE: ${url} ===\n${text.slice(0, 6000)}`)
@@ -478,14 +553,52 @@ async function runJob(jobId: string) {
     mark({ progressMessage: "Running competitor analysis with Anakin..." });
 
     let result: CompetitorAnalysisResult;
+    const failures: string[] = [];
     try {
+      logStep(jobId, "anakin_llm_start");
       result = await analyzeWithAnakin({
         model: job.input.model ?? "gemini-2.5-flash",
         prompt: buildPrompt(sitesText, job.input.context),
         apiKey,
       });
-    } catch {
-      result = buildFallbackAnalysis(fetched, job.input.context);
+      logStep(jobId, "anakin_llm_success");
+      mark({ fallbackUsed: false, fallbackReason: undefined });
+    } catch (error) {
+      logStep(jobId, "anakin_llm_failed", error instanceof Error ? error.message : String(error));
+      failures.push(`Anakin: ${error instanceof Error ? error.message : String(error)}`);
+      const geminiKey = await getEnvValue("GEMINI_API_KEY");
+      if (geminiKey) {
+        try {
+          logStep(jobId, "gemini_direct_start");
+          result = await analyzeWithGeminiDirect({
+            model: job.input.model ?? "gemini-2.5-flash",
+            prompt: buildPrompt(sitesText, job.input.context),
+            apiKey: geminiKey,
+          });
+          logStep(jobId, "gemini_direct_success");
+          mark({ fallbackUsed: false, fallbackReason: undefined, progressMessage: "Analysis completed via Gemini direct API." });
+        } catch (geminiError) {
+          logStep(jobId, "gemini_direct_failed", geminiError instanceof Error ? geminiError.message : String(geminiError));
+          failures.push(`GeminiDirect: ${geminiError instanceof Error ? geminiError.message : String(geminiError)}`);
+          mark({
+            fallbackUsed: true,
+            fallbackReason: failures.join(" | "),
+            progressMessage: "LLM analysis failed; using fallback analysis.",
+          });
+          logStep(jobId, "using_static_fallback");
+          result = buildFallbackAnalysis(fetched, job.input.context);
+        }
+      } else {
+        logStep(jobId, "gemini_key_missing");
+        failures.push("GeminiDirect: Missing GEMINI_API_KEY");
+        mark({
+          fallbackUsed: true,
+          fallbackReason: failures.join(" | "),
+          progressMessage: "LLM analysis failed; using fallback analysis.",
+        });
+        logStep(jobId, "using_static_fallback");
+        result = buildFallbackAnalysis(fetched, job.input.context);
+      }
     }
 
     mark({
@@ -497,8 +610,15 @@ async function runJob(jobId: string) {
     const completedJob = jobs.get(jobId);
     if (completedJob) {
       await saveCompletedAnalysis(completedJob);
+      logStep(jobId, "saved_to_mongodb", {
+        competitors: completedJob.result?.competitors?.length ?? 0,
+        features: completedJob.result?.featureSuggestions?.length ?? 0,
+        fallbackUsed: completedJob.fallbackUsed ?? false,
+      });
     }
+    logStep(jobId, "job_completed");
   } catch (error) {
+    logStep(jobId, "job_failed", error instanceof Error ? error.message : String(error));
     mark({
       status: "error",
       progressMessage: "Analysis failed.",

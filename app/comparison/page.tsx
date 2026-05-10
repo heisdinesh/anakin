@@ -3,5 +3,5 @@
 import { TrackleafDashboard } from "../page";
 
 export default function ComparisonPage() {
-  return <TrackleafDashboard initialSection="comparison" />;
+  return <TrackleafDashboard initialSection="reviews" />;
 }
