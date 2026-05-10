@@ -313,7 +313,7 @@ async function scrapeCompetitorReviews(sourceUrl: string, apiKey: string, userId
     const sentiment = scoreSentiment(content);
 
     return {
-      source: "producthunt",
+      source: "producthunt" as const,
       userId,
       competitorKey,
       competitorName,
