@@ -1,36 +1,48 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Trackleaf
 
-## Getting Started
+In today’s world, building software is easy.
+Knowing **what to build** is the hard part.
 
-First, run the development server:
+Live app: https://trackleaf-anakin.vercel.app/
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+Teams can ship fast, but they still struggle to answer the most important product questions:
+- What problems are customers actually facing?
+- Where are competitors failing?
+- Which feature request matters now?
+- What bug is hurting trust the most?
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Trackleaf is built to solve exactly this.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## The Problem
+Developers and product teams are overloaded with noise from reviews, community posts, and competitor signals across multiple platforms. Everyone can build, but many teams get stuck deciding what to build next.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## The Solution
+Trackleaf runs agentic workflows that:
+1. Scrape reviews and public content across domains and sites.
+2. Analyze sentiment and extract real customer pain points.
+3. Detect market gaps and competitor weaknesses.
+4. Generate actionable feature requests and bug insights.
+5. Produce a competitor analysis matrix for decision clarity.
 
-## Learn More
+## Why This Matters
+The highest-leverage product teams do not just ship faster. They ship the **right things** faster.
 
-To learn more about Next.js, take a look at the following resources:
+Trackleaf helps teams move from guesswork to evidence:
+- Less opinion-driven roadmap planning
+- Better prioritization from real market signals
+- Clear handoff from insight to execution
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## From Insight to Execution
+Insights should not die in docs.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Trackleaf is designed to push outcomes directly into delivery systems like:
+- Jira
+- Trackleaf issue workflows
 
-## Deploy on Vercel
+That means developers can immediately pick up validated feature and bug work without losing context.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Core Idea
+Building is no longer the bottleneck.
+**Decision intelligence is.**
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Trackleaf is the tool that closes this gap by combining scraping, analysis, and execution-ready output in one loop.
