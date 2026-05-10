@@ -154,10 +154,26 @@ const POLL_MS = 2500;
 const USER_ID_KEY = "trackleafUserId";
 const UI_STATE_KEY = "trackleafUiState";
 
-type Section = "competitor" | "reviews" | "comparison" | "actions";
+type Section = "competitor" | "reviews" | "comparison" | "actions" | "history";
 type VoiceTab = "feedback" | "priorities";
 type AnalysisGoal = "product" | "gtm";
 type FeatureSuggestion = AnalysisResult["featureSuggestions"][number];
+type HistoryItem = {
+  jobId: string;
+  createdAt: string;
+  input: {
+    urls: string[];
+    context?: string;
+    model?: string;
+  };
+  result: AnalysisResult;
+};
+type HistoryResponse = {
+  status: string;
+  count: number;
+  items: HistoryItem[];
+  error?: string;
+};
 
 type PersistedUiState = Partial<{
   urls: string[];
@@ -295,6 +311,10 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
   const [featureActionLoading, setFeatureActionLoading] = useState(false);
   const [featureActionError, setFeatureActionError] = useState<string | null>(null);
   const [isPrinting, setIsPrinting] = useState(false);
+  const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [expandedHistoryJobId, setExpandedHistoryJobId] = useState<string | null>(null);
 
   function getOrCreateUserId() {
     const existingUserId = localStorage.getItem(USER_ID_KEY);
@@ -611,6 +631,25 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
     }
   }, []);
 
+  const loadHistory = useCallback(async () => {
+    const userId = getOrCreateUserId();
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const res = await fetch(`/api/competitor-analysis/history?userId=${encodeURIComponent(userId)}`, { cache: "no-store" });
+      const body = (await res.json()) as HistoryResponse;
+      if (!res.ok) {
+        setHistoryError(body.error ?? "Failed to load history");
+        return;
+      }
+      setHistoryItems(body.items ?? []);
+    } catch (error) {
+      setHistoryError(error instanceof Error ? error.message : "Failed to load history");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (activeSection === "competitor" && !job) {
       const timer = setTimeout(() => {
@@ -619,6 +658,15 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
       return () => clearTimeout(timer);
     }
   }, [activeSection, job, loadLatestCompetitorAnalysis]);
+
+  useEffect(() => {
+    if (activeSection === "history" && !historyLoading && historyItems.length === 0) {
+      const timer = setTimeout(() => {
+        void loadHistory();
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+  }, [activeSection, historyLoading, historyItems.length, loadHistory]);
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900">
@@ -629,11 +677,14 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
             <Link href="/competitor-analysis" className={`rounded-lg px-3 py-2 text-left font-medium ${activeSection === "competitor" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
               Market Gap Analysis
             </Link>
-            <Link href="/reviews" className={`rounded-lg px-3 py-2 text-left font-medium ${activeSection === "reviews" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
+            {/* <Link href="/reviews" className={`rounded-lg px-3 py-2 text-left font-medium ${activeSection === "reviews" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
               Voice of Customer
-            </Link>
+            </Link> */}
             <Link href="/actions" className={`rounded-lg px-3 py-2 text-left font-medium ${activeSection === "actions" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
               Actions
+            </Link>
+            <Link href="/history" className={`rounded-lg px-3 py-2 text-left font-medium ${activeSection === "history" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
+              History
             </Link>
           </nav>
         </aside>
@@ -1127,6 +1178,75 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
                       </div>
                     </article>
                   ))}
+                </div>
+              </section>
+            </>
+          )}
+
+          {activeSection === "history" && (
+            <>
+              <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h1 className="text-2xl font-semibold">Analysis History</h1>
+                    <p className="mt-1 text-sm text-slate-600">All market gap analyses run by this user. Click a row to expand query and results.</p>
+                  </div>
+                  <button type="button" onClick={() => void loadHistory()} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                    Refresh
+                  </button>
+                </div>
+              </section>
+
+              {historyError && <section className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{historyError}</section>}
+              {historyLoading && <section className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-600">Loading history...</section>}
+
+              <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="grid gap-3">
+                  {historyItems.length === 0 && !historyLoading && (
+                    <p className="text-sm text-slate-600">No history yet.</p>
+                  )}
+                  {historyItems.map((item) => {
+                    const isOpen = expandedHistoryJobId === item.jobId;
+                    return (
+                      <article key={item.jobId} className="rounded-lg border border-slate-200">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedHistoryJobId(isOpen ? null : item.jobId)}
+                          className="flex w-full items-center justify-between gap-3 p-4 text-left"
+                        >
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">{new Date(item.createdAt).toLocaleString()}</p>
+                            <p className="text-xs text-slate-600">{item.input.urls.length} URL(s) • {item.input.model ?? "gemini-2.5-flash"}</p>
+                          </div>
+                          <span className="text-xs text-slate-500">{isOpen ? "Collapse" : "Expand"}</span>
+                        </button>
+
+                        {isOpen && (
+                          <div className="border-t border-slate-200 p-4">
+                            <h3 className="text-sm font-semibold">Query</h3>
+                            <p className="mt-1 text-xs text-slate-600">URLs</p>
+                            <div className="mt-1 flex flex-wrap gap-2">
+                              {item.input.urls.map((u) => (
+                                <span key={u} className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-700">{u}</span>
+                              ))}
+                            </div>
+                            <p className="mt-3 text-xs text-slate-600">Context</p>
+                            <p className="mt-1 text-sm text-slate-700">{item.input.context || "No context provided."}</p>
+
+                            <h3 className="mt-4 text-sm font-semibold">Results</h3>
+                            <p className="mt-1 text-xs text-slate-600">Summary</p>
+                            <p className="mt-1 text-sm text-slate-700">{item.result.summary || "No summary."}</p>
+                            <p className="mt-3 text-xs text-slate-600">Top Suggestions</p>
+                            <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-slate-700">
+                              {(item.result.featureSuggestions ?? []).slice(0, 5).map((s, idx) => (
+                                <li key={`${item.jobId}_s_${idx}`}>{s.feature} ({s.priority})</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </article>
+                    );
+                  })}
                 </div>
               </section>
             </>

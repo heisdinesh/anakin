@@ -696,3 +696,13 @@ export async function getLatestAnalysisForUser(userId: string) {
   const collection = db.collection<StoredCompetitorAnalysis>("competitor_analyses");
   return collection.find({ userId, status: "completed" }).sort({ createdAt: -1 }).limit(1).next();
 }
+
+export async function listAnalysisHistoryForUser(userId: string, limit = 50) {
+  const db = await getMongoDb();
+  const collection = db.collection<StoredCompetitorAnalysis>("competitor_analyses");
+  return collection
+    .find({ userId, status: "completed" })
+    .sort({ createdAt: -1 })
+    .limit(Math.max(1, Math.min(limit, 200)))
+    .toArray();
+}
