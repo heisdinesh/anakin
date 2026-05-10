@@ -677,9 +677,9 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
             <Link href="/competitor-analysis" className={`rounded-lg px-3 py-2 text-left font-medium ${activeSection === "competitor" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
               Market Gap Analysis
             </Link>
-            {/* <Link href="/reviews" className={`rounded-lg px-3 py-2 text-left font-medium ${activeSection === "reviews" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
+            <Link href="/reviews" className={`rounded-lg px-3 py-2 text-left font-medium ${activeSection === "reviews" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
               Voice of Customer
-            </Link> */}
+            </Link>
             <Link href="/actions" className={`rounded-lg px-3 py-2 text-left font-medium ${activeSection === "actions" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
               Actions
             </Link>
