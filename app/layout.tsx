@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Trackleaf Pulse",
-  description: "Trackleaf Pulse - Social listening and review intelligence",
+  title: "Trackleaf",
+  description: "Trackleaf - Social listening and review intelligence",
 };
 
 export default function RootLayout({

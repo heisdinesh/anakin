@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, KeyboardEvent, useMemo, useState } from "react";
+import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 type AnalysisResult = {
   competitors: Array<{
@@ -15,6 +15,16 @@ type AnalysisResult = {
     weaknesses: string[];
     pricing: string | null;
     tone: string;
+  }>;
+  competitorMatrix: Array<{
+    competitor: string;
+    positioning: string;
+    pricing: string | null;
+    easeOfUse: "High" | "Medium" | "Low";
+    customization: "High" | "Medium" | "Low";
+    reportingDepth: "High" | "Medium" | "Low";
+    idealFor: string;
+    notableGap: string;
   }>;
   marketInsights: string[];
   featureSuggestions: Array<{
@@ -96,85 +106,163 @@ type ComparisonResponse = {
 
 const POLL_MS = 2500;
 const COLORS = ["#2563eb", "#16a34a", "#f59e0b", "#7c3aed", "#ef4444", "#0891b2"];
+const USER_ID_KEY = "trackleafUserId";
+const UI_STATE_KEY = "trackleafUiState";
 
 type Section = "competitor" | "reviews" | "comparison";
 
-function TrendChart({ competitors, metric }: { competitors: ComparisonCompetitor[]; metric: "mentions" | "positivePct" }) {
-  const width = 900;
-  const height = 260;
-  const padding = 24;
+type PersistedUiState = Partial<{
+  urls: string[];
+  context: string;
+  job: CompetitorJobResponse | null;
+  reviewsUrls: string[];
+  reviews: StoredReview[];
+  reviewsJob: ReviewsJobResponse | null;
+  reviewsPage: number;
+  reviewsTotalPages: number;
+  reviewsCompetitor: string;
+  comparison: ComparisonResponse | null;
+}>;
 
-  const allDates = [...new Set(competitors.flatMap((c) => c.trend.map((t) => t.date)))].sort();
-  if (!allDates.length) {
-    return <p className="text-sm text-slate-600">No trend data available yet.</p>;
+function readSavedState(): PersistedUiState {
+  if (typeof window === "undefined") return {};
+  const raw = localStorage.getItem(UI_STATE_KEY);
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw) as PersistedUiState;
+  } catch {
+    return {};
+  }
+}
+
+function ReviewsBarChart({ competitors }: { competitors: ComparisonCompetitor[] }) {
+  const width = 960;
+  const height = 360;
+  const left = 56;
+  const right = 20;
+  const top = 20;
+  const bottom = 64;
+  const innerWidth = width - left - right;
+  const innerHeight = height - top - bottom;
+  const maxMentions = Math.max(1, ...competitors.map((c) => c.mentions));
+
+  if (!competitors.length) {
+    return <p className="text-sm text-slate-600">No comparison data yet.</p>;
   }
 
-  const maxY = Math.max(
-    1,
-    ...competitors.flatMap((c) => c.trend.map((t) => (metric === "mentions" ? t.mentions : t.positivePct))),
-  );
+  const slotWidth = innerWidth / competitors.length;
+  const barWidth = Math.min(56, slotWidth * 0.6);
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="h-64 w-full rounded-xl bg-slate-50">
-      <rect x="0" y="0" width={width} height={height} fill="#f8fafc" rx="12" />
+    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full">
+        <line x1={left} y1={top + innerHeight} x2={width - right} y2={top + innerHeight} stroke="#94a3b8" />
+        <line x1={left} y1={top} x2={left} y2={top + innerHeight} stroke="#94a3b8" />
 
-      {competitors.map((competitor, idx) => {
-        const color = COLORS[idx % COLORS.length];
-        const coords = allDates.map((date, dateIndex) => {
-          const point = competitor.trend.find((t) => t.date === date);
-          const value = point ? (metric === "mentions" ? point.mentions : point.positivePct) : 0;
-          const x = padding + (dateIndex / Math.max(1, allDates.length - 1)) * (width - padding * 2);
-          const y = height - padding - (value / maxY) * (height - padding * 2);
-          return { x, y };
-        });
+        {[0, 0.25, 0.5, 0.75, 1].map((tick) => {
+          const value = Math.round(maxMentions * tick);
+          const y = top + innerHeight - tick * innerHeight;
+          return (
+            <g key={tick}>
+              <line x1={left} y1={y} x2={width - right} y2={y} stroke="#e2e8f0" />
+              <text x={left - 8} y={y + 4} textAnchor="end" fontSize="11" fill="#64748b">{value}</text>
+            </g>
+          );
+        })}
 
-        if (!coords.length) return null;
+        {competitors.map((c, index) => {
+          const xCenter = left + index * slotWidth + slotWidth / 2;
+          const totalBarHeight = (c.mentions / maxMentions) * innerHeight;
+          const positiveHeight = c.mentions ? (c.positive / c.mentions) * totalBarHeight : 0;
+          const neutralHeight = c.mentions ? (c.neutral / c.mentions) * totalBarHeight : 0;
+          const negativeHeight = c.mentions ? (c.negative / c.mentions) * totalBarHeight : 0;
+          const y = top + innerHeight - totalBarHeight;
+          const label = c.competitorName || c.competitorKey;
 
-        // For a single time bucket, draw a short horizontal segment + dot so line is visible.
-        const linePoints = coords.length === 1
-          ? `${Math.max(padding, coords[0].x - 14)},${coords[0].y} ${Math.min(width - padding, coords[0].x + 14)},${coords[0].y}`
-          : coords.map((c) => `${c.x},${c.y}`).join(" ");
-
-        return (
-          <g key={competitor.competitorKey}>
-            <polyline fill="none" stroke={color} strokeWidth="3" points={linePoints} strokeLinecap="round" />
-            {coords.map((c, i) => (
-              <circle key={`${competitor.competitorKey}_${i}`} cx={c.x} cy={c.y} r="3.5" fill={color} />
-            ))}
-          </g>
-        );
-      })}
-    </svg>
+          return (
+            <g key={c.competitorKey}>
+              <rect x={xCenter - barWidth / 2} y={y} width={barWidth} height={positiveHeight} fill="#10b981" />
+              <rect x={xCenter - barWidth / 2} y={y + positiveHeight} width={barWidth} height={neutralHeight} fill="#94a3b8" />
+              <rect x={xCenter - barWidth / 2} y={y + positiveHeight + neutralHeight} width={barWidth} height={negativeHeight} fill="#ef4444" />
+              <text x={xCenter} y={y - 6} textAnchor="middle" fontSize="11" fill="#334155">{c.mentions}</text>
+              <text x={xCenter} y={top + innerHeight + 18} textAnchor="middle" fontSize="11" fill="#334155">
+                {label.length > 14 ? `${label.slice(0, 14)}...` : label}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+      <div className="mt-3 flex flex-wrap gap-4 text-xs text-slate-600">
+        <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />Positive</span>
+        <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-slate-400" />Neutral</span>
+        <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-red-500" />Negative</span>
+      </div>
+    </div>
   );
 }
 
 export default function Home() {
-  const [activeSection, setActiveSection] = useState<Section>("competitor");
+  return <TrackleafDashboard initialSection="competitor" />;
+}
 
-  const [urls, setUrls] = useState<string[]>([
+export function TrackleafDashboard({ initialSection }: { initialSection: Section }) {
+  const savedState = useMemo(() => readSavedState(), []);
+  const activeSection = initialSection;
+
+  const [urls, setUrls] = useState<string[]>(savedState.urls ?? [
     "https://linear.app",
     "https://asana.com",
     "https://www.atlassian.com/software/jira",
   ]);
   const [urlInput, setUrlInput] = useState("");
-  const [context, setContext] = useState("We are building Trackleaf, a project management tool for small engineering teams.");
+  const [context, setContext] = useState(savedState.context ?? "We are building Trackleaf, a project management tool for small engineering teams.");
   const [loading, setLoading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [job, setJob] = useState<CompetitorJobResponse | null>(null);
+  const [job, setJob] = useState<CompetitorJobResponse | null>(savedState.job ?? null);
 
-  const [reviewsUrls, setReviewsUrls] = useState<string[]>(["https://www.producthunt.com/products/jira/reviews?filter=all&feed=single&page=1"]);
+  const [reviewsUrls, setReviewsUrls] = useState<string[]>(savedState.reviewsUrls ?? ["https://www.producthunt.com/products/jira/reviews?filter=all&feed=single&page=1"]);
   const [reviewsUrlInput, setReviewsUrlInput] = useState("");
   const [reviewsLoading, setReviewsLoading] = useState(false);
   const [reviewsError, setReviewsError] = useState<string | null>(null);
-  const [reviewsJob, setReviewsJob] = useState<ReviewsJobResponse | null>(null);
-  const [reviews, setReviews] = useState<StoredReview[]>([]);
-  const [reviewsPage, setReviewsPage] = useState(1);
-  const [reviewsTotalPages, setReviewsTotalPages] = useState(1);
-  const [reviewsCompetitor, setReviewsCompetitor] = useState<string>("");
+  const [reviewsJob, setReviewsJob] = useState<ReviewsJobResponse | null>(savedState.reviewsJob ?? null);
+  const [reviews, setReviews] = useState<StoredReview[]>(savedState.reviews ?? []);
+  const [reviewsPage, setReviewsPage] = useState(savedState.reviewsPage ?? 1);
+  const [reviewsTotalPages, setReviewsTotalPages] = useState(savedState.reviewsTotalPages ?? 1);
+  const [reviewsCompetitor, setReviewsCompetitor] = useState<string>(savedState.reviewsCompetitor ?? "");
 
   const [comparisonLoading, setComparisonLoading] = useState(false);
   const [comparisonError, setComparisonError] = useState<string | null>(null);
-  const [comparison, setComparison] = useState<ComparisonResponse | null>(null);
+  const [comparison, setComparison] = useState<ComparisonResponse | null>(savedState.comparison ?? null);
+
+  function getOrCreateUserId() {
+    const existingUserId = localStorage.getItem(USER_ID_KEY);
+    if (existingUserId) return existingUserId;
+    const nextUserId = crypto.randomUUID();
+    localStorage.setItem(USER_ID_KEY, nextUserId);
+    return nextUserId;
+  }
+
+  useEffect(() => {
+    getOrCreateUserId();
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(
+      UI_STATE_KEY,
+      JSON.stringify({
+        urls,
+        context,
+        job,
+        reviewsUrls,
+        reviews,
+        reviewsJob,
+        reviewsPage,
+        reviewsTotalPages,
+        reviewsCompetitor,
+        comparison,
+      }),
+    );
+  }, [urls, context, job, reviewsUrls, reviews, reviewsJob, reviewsPage, reviewsTotalPages, reviewsCompetitor, comparison]);
 
   const competitorOptions = useMemo(() => {
     const map = new Map<string, string>();
@@ -218,10 +306,11 @@ export default function Home() {
     setJob(null);
 
     try {
+      const userId = getOrCreateUserId();
       const res = await fetch("/api/competitor-analysis", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ urls, context: context.trim() || undefined }),
+        body: JSON.stringify({ userId, urls, context: context.trim() || undefined }),
       });
       const body = await res.json();
       if (!res.ok) {
@@ -237,7 +326,9 @@ export default function Home() {
   }
 
   async function loadStoredReviews(page = 1, competitor = reviewsCompetitor) {
+    const userId = getOrCreateUserId();
     const qs = new URLSearchParams({ page: String(page), pageSize: "12" });
+    qs.set("userId", userId);
     if (competitor) qs.set("competitor", competitor);
 
     const res = await fetch(`/api/reviews?${qs.toString()}`, { cache: "no-store" });
@@ -275,6 +366,7 @@ export default function Home() {
   }
 
   async function onStartReviewsScrape() {
+    const userId = getOrCreateUserId();
     setReviewsLoading(true);
     setReviewsError(null);
     setReviewsJob(null);
@@ -283,7 +375,7 @@ export default function Home() {
       const res = await fetch("/api/reviews/scrape", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ urls: reviewsUrls }),
+        body: JSON.stringify({ userId, urls: reviewsUrls }),
       });
       const body = await res.json();
       if (!res.ok) {
@@ -298,11 +390,12 @@ export default function Home() {
     }
   }
 
-  async function loadComparison() {
+  const loadComparison = useCallback(async () => {
+    const userId = getOrCreateUserId();
     setComparisonLoading(true);
     setComparisonError(null);
     try {
-      const res = await fetch("/api/reviews/comparison", { cache: "no-store" });
+      const res = await fetch(`/api/reviews/comparison?userId=${encodeURIComponent(userId)}`, { cache: "no-store" });
       const body = (await res.json()) as ComparisonResponse;
       if (!res.ok) {
         setComparisonError(body.error ?? "Failed to load comparison");
@@ -314,7 +407,32 @@ export default function Home() {
     } finally {
       setComparisonLoading(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    if (activeSection === "comparison" && !comparison && !comparisonLoading) {
+      void loadComparison();
+    }
+  }, [activeSection, comparison, comparisonLoading, loadComparison]);
+
+  const loadLatestCompetitorAnalysis = useCallback(async () => {
+    const userId = getOrCreateUserId();
+    const res = await fetch(`/api/competitor-analysis/latest?userId=${encodeURIComponent(userId)}`, { cache: "no-store" });
+    if (!res.ok) return;
+    const body = (await res.json()) as CompetitorJobResponse;
+    if (body?.status === "completed") {
+      setJob(body);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeSection === "competitor" && !job) {
+      const timer = setTimeout(() => {
+        void loadLatestCompetitorAnalysis();
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+  }, [activeSection, job, loadLatestCompetitorAnalysis]);
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900">
@@ -322,33 +440,18 @@ export default function Home() {
         <aside className="fixed left-0 top-0 hidden h-screen w-72 shrink-0 border-r border-slate-200 bg-white p-5 lg:block">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Workspace</h2>
           <nav className="mt-4 grid gap-2 text-sm">
-            <button
-              type="button"
-              onClick={() => setActiveSection("competitor")}
-              className={`rounded-lg px-3 py-2 text-left font-medium ${activeSection === "competitor" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}
-            >
+            <Link href="/competitor-analysis" className={`rounded-lg px-3 py-2 text-left font-medium ${activeSection === "competitor" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
               Competitor Analysis
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveSection("reviews")}
-              className={`rounded-lg px-3 py-2 text-left font-medium ${activeSection === "reviews" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}
-            >
+            </Link>
+            <Link href="/reviews" className={`rounded-lg px-3 py-2 text-left font-medium ${activeSection === "reviews" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
               Reviews
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setActiveSection("comparison");
-                void loadComparison();
-              }}
-              className={`rounded-lg px-3 py-2 text-left font-medium ${activeSection === "comparison" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}
-            >
+            </Link>
+            <Link href="/comparison" className={`rounded-lg px-3 py-2 text-left font-medium ${activeSection === "comparison" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
               Comparison
-            </button>
+            </Link>
           </nav>
           <div className="mt-6 text-xs text-slate-500">
-            <Link href="/">Trackleaf Pulse</Link>
+            <Link href="/competitor-analysis">Trackleaf</Link>
           </div>
         </aside>
 
@@ -356,7 +459,7 @@ export default function Home() {
           {activeSection === "competitor" && (
             <>
               <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <h1 className="text-2xl font-semibold">Async Trackleaf Pulse (Anakin)</h1>
+                <h1 className="text-2xl font-semibold">Async Trackleaf (Anakin)</h1>
                 <p className="mt-2 text-sm text-slate-600">Add competitor URLs, start analysis, and view results live via polling.</p>
 
                 <form className="mt-6 grid gap-4" onSubmit={onSubmit}>
@@ -412,6 +515,85 @@ export default function Home() {
                     </span>
                     <span className="text-sm text-slate-600">{job.progressMessage}</span>
                   </div>
+
+                  {job.metrics && (
+                    <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                      <div className="rounded-lg bg-slate-50 p-3 text-sm">Competitors: {job.metrics.competitors_analysed}</div>
+                      <div className="rounded-lg bg-slate-50 p-3 text-sm">Features Suggested: {job.metrics.features_suggested}</div>
+                      <div className="rounded-lg bg-slate-50 p-3 text-sm">Opportunities: {job.metrics.opportunities_found}</div>
+                    </div>
+                  )}
+
+                  {job.result && (
+                    <div className="mt-6 grid gap-6">
+                      <div>
+                        <h2 className="text-lg font-semibold">Feature Suggestions</h2>
+                        <p className="mt-1 text-sm text-slate-600">Recommended actions based on competitor gaps and opportunities.</p>
+                        <div className="mt-3 grid gap-3">
+                          {job.result.featureSuggestions.map((f, idx) => (
+                            <article key={`${f.feature}_${idx}`} className="rounded-lg border border-slate-200 p-4">
+                              <h3 className="font-semibold">{f.feature}</h3>
+                              <p className="mt-1 text-sm text-slate-700">{f.rationale}</p>
+                              <p className="mt-2 text-xs text-slate-500">Priority: {f.priority} | Inspiration: {f.inspiration}</p>
+                            </article>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <h2 className="text-lg font-semibold">Competitor Analysis Matrix</h2>
+                        <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200">
+                          <table className="min-w-full text-sm">
+                            <thead className="bg-slate-50 text-left">
+                              <tr>
+                                <th className="px-3 py-2 font-semibold">Competitor</th>
+                                <th className="px-3 py-2 font-semibold">Ease</th>
+                                <th className="px-3 py-2 font-semibold">Custom</th>
+                                <th className="px-3 py-2 font-semibold">Reporting</th>
+                                <th className="px-3 py-2 font-semibold">Ideal For</th>
+                                <th className="px-3 py-2 font-semibold">Notable Gap</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {(job.result.competitorMatrix ?? []).map((row, idx) => (
+                                <tr key={`${row.competitor}_${idx}`} className="border-t border-slate-200">
+                                  <td className="px-3 py-2">{row.competitor}</td>
+                                  <td className="px-3 py-2">{row.easeOfUse}</td>
+                                  <td className="px-3 py-2">{row.customization}</td>
+                                  <td className="px-3 py-2">{row.reportingDepth}</td>
+                                  <td className="px-3 py-2">{row.idealFor}</td>
+                                  <td className="px-3 py-2">{row.notableGap}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+
+                      <div>
+                        <h2 className="text-lg font-semibold">Summary</h2>
+                        <p className="mt-2 text-sm text-slate-700">{job.result.summary || "No summary returned."}</p>
+                      </div>
+
+                      <div>
+                        <h2 className="text-lg font-semibold">Competitors (Reference)</h2>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {job.result.competitors.map((c, idx) => (
+                            <span key={`${c.url}_${idx}`} className="rounded-full border border-slate-300 bg-slate-50 px-3 py-1 text-sm text-slate-800">
+                              {c.name || c.url}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      <details className="rounded-lg border border-slate-200 p-3">
+                        <summary className="cursor-pointer text-sm font-medium">Raw JSON</summary>
+                        <pre className="mt-3 overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-100">
+                          {JSON.stringify(job.result, null, 2)}
+                        </pre>
+                      </details>
+                    </div>
+                  )}
                 </section>
               )}
             </>
@@ -554,16 +736,9 @@ export default function Home() {
                   </section>
 
                   <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                    <h2 className="text-lg font-semibold">Mentions Trend</h2>
+                    <h2 className="text-lg font-semibold">Total Reviews by Company</h2>
                     <div className="mt-4">
-                      <TrendChart competitors={comparison.competitors} metric="mentions" />
-                    </div>
-                  </section>
-
-                  <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                    <h2 className="text-lg font-semibold">Positive Sentiment % Trend</h2>
-                    <div className="mt-4">
-                      <TrendChart competitors={comparison.competitors} metric="positivePct" />
+                      <ReviewsBarChart competitors={comparison.competitors} />
                     </div>
                   </section>
 

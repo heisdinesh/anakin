@@ -6,6 +6,7 @@ type SentimentLabel = "positive" | "neutral" | "negative";
 
 export type ReviewRecord = {
   source: "producthunt";
+  userId: string;
   competitorKey: string;
   competitorName: string;
   sourceUrl: string;
@@ -20,6 +21,7 @@ export type ReviewRecord = {
 
 export type ReviewsScrapeJob = {
   id: string;
+  userId: string;
   status: JobStatus;
   progressMessage: string;
   createdAt: string;
@@ -214,7 +216,7 @@ async function saveReviews(records: ReviewRecord[]) {
 
   for (const record of records) {
     const result = await collection.updateOne(
-      { source: record.source, competitorKey: record.competitorKey, contentHash: record.contentHash },
+      { source: record.source, userId: record.userId, competitorKey: record.competitorKey, contentHash: record.contentHash },
       { $set: record },
       { upsert: true },
     );
@@ -226,7 +228,7 @@ async function saveReviews(records: ReviewRecord[]) {
   return { insertedCount, updatedCount };
 }
 
-async function scrapeCompetitorReviews(sourceUrl: string, apiKey: string) {
+async function scrapeCompetitorReviews(sourceUrl: string, apiKey: string, userId: string) {
   const normalizedUrl = normalizePageUrl(sourceUrl);
   const firstMarkdown = await scrapeMarkdownWithRetry(normalizedUrl, apiKey);
   const pageUrls = discoverPageUrls(firstMarkdown, normalizedUrl);
@@ -248,6 +250,7 @@ async function scrapeCompetitorReviews(sourceUrl: string, apiKey: string) {
 
     return {
       source: "producthunt",
+      userId,
       competitorKey,
       competitorName,
       sourceUrl: normalizedUrl,
@@ -295,7 +298,7 @@ async function runReviewsJob(jobId: string) {
         competitorsScraped: i,
       });
 
-      const output = await scrapeCompetitorReviews(sourceUrl, apiKey);
+      const output = await scrapeCompetitorReviews(sourceUrl, apiKey, current.userId);
       totalPages += output.pagesScraped;
       totalExtracted += output.reviewsExtracted;
 
@@ -326,7 +329,7 @@ async function runReviewsJob(jobId: string) {
   }
 }
 
-export function createReviewsScrapeJob(sourceUrls: string[]) {
+export function createReviewsScrapeJob(sourceUrls: string[], userId: string) {
   const cleanUrls = sourceUrls
     .map((url) => url.trim())
     .filter(Boolean)
@@ -334,6 +337,7 @@ export function createReviewsScrapeJob(sourceUrls: string[]) {
 
   const job: ReviewsScrapeJob = {
     id: toJobId(),
+    userId,
     status: "pending",
     progressMessage: "Queued...",
     createdAt: nowIso(),
@@ -358,7 +362,7 @@ export function getReviewsScrapeJob(jobId: string) {
   return jobs.get(jobId);
 }
 
-export async function listStoredProductHuntReviews(page = 1, pageSize = 20, competitorKey?: string) {
+export async function listStoredProductHuntReviews(userId: string, page = 1, pageSize = 20, competitorKey?: string) {
   const db = await getMongoDb();
   const collection = db.collection<ReviewRecord>("producthunt_reviews");
   const safePage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
@@ -366,6 +370,7 @@ export async function listStoredProductHuntReviews(page = 1, pageSize = 20, comp
   const skip = (safePage - 1) * safePageSize;
   const filter = {
     source: "producthunt" as const,
+    userId,
     ...(competitorKey ? { competitorKey } : {}),
   };
 
@@ -386,10 +391,10 @@ export async function listStoredProductHuntReviews(page = 1, pageSize = 20, comp
   };
 }
 
-export async function getComparisonData() {
+export async function getComparisonData(userId: string) {
   const db = await getMongoDb();
   const collection = db.collection<ReviewRecord>("producthunt_reviews");
-  const docs = await collection.find({ source: "producthunt" }).sort({ scrapedAt: 1 }).toArray();
+  const docs = await collection.find({ source: "producthunt", userId }).sort({ scrapedAt: 1 }).toArray();
 
   const map = new Map<string, {
     competitorKey: string;

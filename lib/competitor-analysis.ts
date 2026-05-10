@@ -1,7 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { load } from "cheerio";
+import { getMongoDb } from "@/lib/mongo";
 
 export type CompetitorInput = {
+  userId: string;
   urls: string[];
   context?: string;
   model?: string;
@@ -27,8 +29,20 @@ export type FeatureSuggestion = {
   inspiration: string;
 };
 
+export type CompetitorMatrixRow = {
+  competitor: string;
+  positioning: string;
+  pricing: string | null;
+  easeOfUse: "High" | "Medium" | "Low";
+  customization: "High" | "Medium" | "Low";
+  reportingDepth: "High" | "Medium" | "Low";
+  idealFor: string;
+  notableGap: string;
+};
+
 export type CompetitorAnalysisResult = {
   competitors: CompetitorRecord[];
+  competitorMatrix: CompetitorMatrixRow[];
   marketInsights: string[];
   featureSuggestions: FeatureSuggestion[];
   opportunities: string[];
@@ -191,6 +205,18 @@ function buildPrompt(sitesText: string, context?: string) {
       "tone": "brand tone e.g. Enterprise, Developer-focused, Consumer"
     }
   ],
+  "competitorMatrix": [
+    {
+      "competitor": "name",
+      "positioning": "one-line positioning",
+      "pricing": "pricing model if visible else null",
+      "easeOfUse": "High | Medium | Low",
+      "customization": "High | Medium | Low",
+      "reportingDepth": "High | Medium | Low",
+      "idealFor": "best-fit audience",
+      "notableGap": "largest weakness or gap"
+    }
+  ],
   "marketInsights": ["key trend or pattern observed across competitors"],
   "featureSuggestions": [
     {
@@ -220,12 +246,46 @@ function normalizeResult(raw: unknown): CompetitorAnalysisResult {
 
   return {
     competitors: Array.isArray(obj.competitors) ? (obj.competitors as CompetitorRecord[]) : [],
+    competitorMatrix: Array.isArray(obj.competitorMatrix) ? (obj.competitorMatrix as CompetitorMatrixRow[]) : [],
     marketInsights: Array.isArray(obj.marketInsights) ? (obj.marketInsights as string[]) : [],
     featureSuggestions: Array.isArray(obj.featureSuggestions) ? (obj.featureSuggestions as FeatureSuggestion[]) : [],
     opportunities: Array.isArray(obj.opportunities) ? (obj.opportunities as string[]) : [],
     threats: Array.isArray(obj.threats) ? (obj.threats as string[]) : [],
     summary: typeof obj.summary === "string" ? obj.summary : "",
   };
+}
+
+type StoredCompetitorAnalysis = {
+  userId: string;
+  jobId: string;
+  urls: string[];
+  context?: string;
+  model: string;
+  status: "completed";
+  createdAt: string;
+  result: CompetitorAnalysisResult;
+};
+
+async function saveCompletedAnalysis(job: AnalysisJob) {
+  if (!job.result) return;
+  const db = await getMongoDb();
+  const collection = db.collection<StoredCompetitorAnalysis>("competitor_analyses");
+  await collection.updateOne(
+    { userId: job.input.userId, jobId: job.id },
+    {
+      $set: {
+        userId: job.input.userId,
+        jobId: job.id,
+        urls: job.input.urls,
+        context: job.input.context,
+        model: job.input.model ?? "gemini-2.5-flash",
+        status: "completed",
+        createdAt: job.createdAt,
+        result: job.result,
+      },
+    },
+    { upsert: true },
+  );
 }
 
 async function analyzeWithAnakin(payload: { model: string; prompt: string; apiKey: string }): Promise<CompetitorAnalysisResult> {
@@ -373,7 +433,18 @@ function buildFallbackAnalysis(sites: ScrapedSite[], context?: string): Competit
     `Winning will likely depend on simplicity plus targeted depth rather than breadth.${contextSuffix}`,
   ].join(" ");
 
-  return { competitors, marketInsights, featureSuggestions, opportunities, threats, summary };
+  const competitorMatrix: CompetitorMatrixRow[] = competitors.map((c) => ({
+    competitor: c.name || c.url,
+    positioning: c.description,
+    pricing: c.pricing,
+    easeOfUse: "Medium",
+    customization: "Medium",
+    reportingDepth: "Medium",
+    idealFor: c.targetAudience || "Cross-functional teams",
+    notableGap: c.weaknesses[0] || "Needs clearer differentiation for small teams",
+  }));
+
+  return { competitors, competitorMatrix, marketInsights, featureSuggestions, opportunities, threats, summary };
 }
 
 async function runJob(jobId: string) {
@@ -422,6 +493,11 @@ async function runJob(jobId: string) {
       progressMessage: "Analysis completed.",
       result,
     });
+
+    const completedJob = jobs.get(jobId);
+    if (completedJob) {
+      await saveCompletedAnalysis(completedJob);
+    }
   } catch (error) {
     mark({
       status: "error",
@@ -453,4 +529,10 @@ export function createAnalysisJob(input: CompetitorInput) {
 
 export function getAnalysisJob(jobId: string) {
   return jobs.get(jobId);
+}
+
+export async function getLatestAnalysisForUser(userId: string) {
+  const db = await getMongoDb();
+  const collection = db.collection<StoredCompetitorAnalysis>("competitor_analyses");
+  return collection.find({ userId, status: "completed" }).sort({ createdAt: -1 }).limit(1).next();
 }

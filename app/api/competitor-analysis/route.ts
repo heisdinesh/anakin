@@ -11,6 +11,7 @@ function isHttpUrl(url: string) {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
+    const userId = typeof body?.userId === "string" ? body.userId.trim() : "";
     const rawUrls = Array.isArray(body?.urls) ? body.urls : [];
     const urls = rawUrls
       .filter((u: unknown) => typeof u === "string")
@@ -18,6 +19,10 @@ export async function POST(request: Request) {
       .filter(Boolean);
 
     const context = typeof body?.context === "string" ? body.context.trim() : undefined;
+
+    if (!userId) {
+      return NextResponse.json({ error: "userId is required" }, { status: 400 });
+    }
 
     if (!urls.length) {
       return NextResponse.json({ error: "urls cannot be empty" }, { status: 400 });
@@ -33,7 +38,7 @@ export async function POST(request: Request) {
       }
     }
 
-    const job = createAnalysisJob({ urls, context, model: HARDCODED_MODEL });
+    const job = createAnalysisJob({ userId, urls, context, model: HARDCODED_MODEL });
 
     return NextResponse.json(
       {

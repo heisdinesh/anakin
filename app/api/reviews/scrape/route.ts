@@ -5,6 +5,10 @@ const DEFAULT_URL = "https://www.producthunt.com/products/jira/reviews?filter=al
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}));
+  const userId = typeof body?.userId === "string" ? body.userId.trim() : "";
+  if (!userId) {
+    return NextResponse.json({ error: "userId is required" }, { status: 400 });
+  }
   const rawUrls = Array.isArray(body?.urls) ? body.urls : [];
   const urls = rawUrls
     .filter((value: unknown) => typeof value === "string")
@@ -22,7 +26,7 @@ export async function POST(request: Request) {
     }
   }
 
-  const job = createReviewsScrapeJob(candidateUrls);
+  const job = createReviewsScrapeJob(candidateUrls, userId);
 
   return NextResponse.json({
     status: "accepted",
