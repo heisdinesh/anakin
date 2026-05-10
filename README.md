@@ -1,4 +1,4 @@
-# Trackleaf
+# Trackleaf GTM Radar
 
 In today’s world, building software is easy.
 Knowing **what to build** is the hard part.
@@ -11,13 +11,13 @@ Teams can ship fast, but they still struggle to answer the most important produc
 - Which feature request matters now?
 - What bug is hurting trust the most?
 
-Trackleaf is built to solve exactly this.
+Trackleaf GTM Radar is built to solve exactly this.
 
 ## The Problem
 Developers and product teams are overloaded with noise from reviews, community posts, and competitor signals across multiple platforms. Everyone can build, but many teams get stuck deciding what to build next.
 
 ## The Solution
-Trackleaf runs agentic workflows that:
+Trackleaf GTM Radar runs agentic workflows that:
 1. Scrape reviews and public content across domains and sites.
 2. Analyze sentiment and extract real customer pain points.
 3. Detect market gaps and competitor weaknesses.
@@ -27,7 +27,7 @@ Trackleaf runs agentic workflows that:
 ## Why This Matters
 The highest-leverage product teams do not just ship faster. They ship the **right things** faster.
 
-Trackleaf helps teams move from guesswork to evidence:
+Trackleaf GTM Radar helps teams move from guesswork to evidence:
 - Less opinion-driven roadmap planning
 - Better prioritization from real market signals
 - Clear handoff from insight to execution
@@ -35,7 +35,7 @@ Trackleaf helps teams move from guesswork to evidence:
 ## From Insight to Execution
 Insights should not die in docs.
 
-Trackleaf is designed to push outcomes directly into delivery systems like:
+Trackleaf GTM Radar is designed to push outcomes directly into delivery systems like:
 - Jira
 - Trackleaf issue workflows
 
@@ -45,4 +45,4 @@ That means developers can immediately pick up validated feature and bug work wit
 Building is no longer the bottleneck.
 **Decision intelligence is.**
 
-Trackleaf is the tool that closes this gap by combining scraping, analysis, and execution-ready output in one loop.
+Trackleaf GTM Radar is the tool that closes this gap by combining scraping, analysis, and execution-ready output in one loop.

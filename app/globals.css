@@ -17,3 +17,7 @@ body {
   color: var(--foreground);
   font-family: var(--font-geist-sans), "Segoe UI", sans-serif;
 }
+
+button:not(:disabled) {
+  cursor: pointer;
+}

@@ -489,7 +489,7 @@ function buildFallbackAnalysis(sites: ScrapedSite[], context?: string): Competit
   const contextSuffix = context ? ` For your context (${context.slice(0, 120)}), focus on speed-to-value.` : "";
   const summary = [
     "The landscape is crowded with mature project-management platforms emphasizing collaboration, integrations, and planning workflows.",
-    "A strong wedge for Trackleaf is low-friction onboarding and operational clarity for small engineering teams.",
+    "A strong wedge for Trackleaf GTM Radar is low-friction onboarding and operational clarity for small engineering teams.",
     `Winning will likely depend on simplicity plus targeted depth rather than breadth.${contextSuffix}`,
   ].join(" ");
 

@@ -255,7 +255,7 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
     "https://www.atlassian.com/software/jira",
   ]);
   const [urlInput, setUrlInput] = useState("");
-  const [context, setContext] = useState(savedState.context ?? "We are building Trackleaf. Help us identify customer pain, market gaps, and what to build next.");
+  const [context, setContext] = useState(savedState.context ?? "We are building Trackleaf GTM Radar. Help us identify customer pain, market gaps, and what to build next.");
   const [loading, setLoading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [job, setJob] = useState<CompetitorJobResponse | null>(savedState.job ?? null);
@@ -598,7 +598,7 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
     <div className="min-h-screen bg-slate-100 text-slate-900">
       <main className="flex w-full">
         <aside className="fixed left-0 top-0 hidden h-screen w-72 shrink-0 border-r border-slate-200 bg-white p-5 lg:block">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Decision Engine</h2>
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Trackleaf GTM Radar</h2>
           <nav className="mt-4 grid gap-2 text-sm">
             <Link href="/competitor-analysis" className={`rounded-lg px-3 py-2 text-left font-medium ${activeSection === "competitor" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
               Market Gap Analysis
