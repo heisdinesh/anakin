@@ -40,6 +40,16 @@ export type CompetitorMatrixRow = {
   notableGap: string;
 };
 
+export type GtmPlan = {
+  targetAudience: string[];
+  valueProposition: string[];
+  positioningAndMessaging: string[];
+  pricing: string[];
+  distributionChannels: string[];
+  customerAcquisition: string[];
+  successMetrics: string[];
+};
+
 export type CompetitorAnalysisResult = {
   competitors: CompetitorRecord[];
   competitorMatrix: CompetitorMatrixRow[];
@@ -48,6 +58,7 @@ export type CompetitorAnalysisResult = {
   opportunities: string[];
   threats: string[];
   summary: string;
+  gtmPlan?: GtmPlan;
 };
 
 export type JobStatus = "pending" | "processing" | "completed" | "error";
@@ -239,7 +250,16 @@ function buildPrompt(sitesText: string, context?: string) {
   ],
   "opportunities": ["market gap none of the competitors address well"],
   "threats": ["competitive threat to watch out for"],
-  "summary": "2-3 sentence overall competitive landscape summary"
+  "summary": "2-3 sentence overall competitive landscape summary",
+  "gtmPlan": {
+    "targetAudience": ["ideal customers or segments"],
+    "valueProposition": ["why the product matters"],
+    "positioningAndMessaging": ["positioning and key messaging points"],
+    "pricing": ["pricing strategy options"],
+    "distributionChannels": ["sales, ads, partners, app stores, etc."],
+    "customerAcquisition": ["campaigns, outbound, SEO, referrals"],
+    "successMetrics": ["revenue, conversion rate, CAC, retention"]
+  }
 }`;
 
   return (
@@ -254,6 +274,7 @@ function buildPrompt(sitesText: string, context?: string) {
 
 function normalizeResult(raw: unknown): CompetitorAnalysisResult {
   const obj = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
+  const gtm = (typeof obj.gtmPlan === "object" && obj.gtmPlan !== null ? obj.gtmPlan : {}) as Record<string, unknown>;
 
   return {
     competitors: Array.isArray(obj.competitors) ? (obj.competitors as CompetitorRecord[]) : [],
@@ -263,6 +284,15 @@ function normalizeResult(raw: unknown): CompetitorAnalysisResult {
     opportunities: Array.isArray(obj.opportunities) ? (obj.opportunities as string[]) : [],
     threats: Array.isArray(obj.threats) ? (obj.threats as string[]) : [],
     summary: typeof obj.summary === "string" ? obj.summary : "",
+    gtmPlan: {
+      targetAudience: Array.isArray(gtm.targetAudience) ? (gtm.targetAudience as string[]) : [],
+      valueProposition: Array.isArray(gtm.valueProposition) ? (gtm.valueProposition as string[]) : [],
+      positioningAndMessaging: Array.isArray(gtm.positioningAndMessaging) ? (gtm.positioningAndMessaging as string[]) : [],
+      pricing: Array.isArray(gtm.pricing) ? (gtm.pricing as string[]) : [],
+      distributionChannels: Array.isArray(gtm.distributionChannels) ? (gtm.distributionChannels as string[]) : [],
+      customerAcquisition: Array.isArray(gtm.customerAcquisition) ? (gtm.customerAcquisition as string[]) : [],
+      successMetrics: Array.isArray(gtm.successMetrics) ? (gtm.successMetrics as string[]) : [],
+    },
   };
 }
 
@@ -504,7 +534,17 @@ function buildFallbackAnalysis(sites: ScrapedSite[], context?: string): Competit
     notableGap: c.weaknesses[0] || "Needs clearer differentiation for small teams",
   }));
 
-  return { competitors, competitorMatrix, marketInsights, featureSuggestions, opportunities, threats, summary };
+  const gtmPlan: GtmPlan = {
+    targetAudience: ["Small engineering teams", "Startup product teams", "Cross-functional delivery teams"],
+    valueProposition: ["Decide what to build with evidence from competitor and customer signals"],
+    positioningAndMessaging: ["From signal to shipped roadmap decisions", "Decision intelligence for faster GTM execution"],
+    pricing: ["Freemium for teams getting started", "Per-seat growth plan", "Enterprise plan with governance and integrations"],
+    distributionChannels: ["Product-led onboarding", "Founder-led outbound to PM leaders", "Content + community + SEO"],
+    customerAcquisition: ["Comparison landing pages", "Use-case based demos", "Referral loop from shared reports"],
+    successMetrics: ["Activation rate", "Lead-to-trial conversion", "Trial-to-paid conversion", "Retention and expansion"],
+  };
+
+  return { competitors, competitorMatrix, marketInsights, featureSuggestions, opportunities, threats, summary, gtmPlan };
 }
 
 async function runJob(jobId: string) {

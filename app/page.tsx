@@ -37,6 +37,15 @@ type AnalysisResult = {
   opportunities: string[];
   threats: string[];
   summary: string;
+  gtmPlan?: {
+    targetAudience: string[];
+    valueProposition: string[];
+    positioningAndMessaging: string[];
+    pricing: string[];
+    distributionChannels: string[];
+    customerAcquisition: string[];
+    successMetrics: string[];
+  };
 };
 
 type CompetitorJobResponse = {
@@ -147,11 +156,13 @@ const UI_STATE_KEY = "trackleafUiState";
 
 type Section = "competitor" | "reviews" | "comparison" | "actions";
 type VoiceTab = "feedback" | "priorities";
+type AnalysisGoal = "product" | "gtm";
 type FeatureSuggestion = AnalysisResult["featureSuggestions"][number];
 
 type PersistedUiState = Partial<{
   urls: string[];
   context: string;
+  analysisGoal: AnalysisGoal;
   job: CompetitorJobResponse | null;
   reviewsUrls: string[];
   reviews: StoredReview[];
@@ -256,6 +267,7 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
   ]);
   const [urlInput, setUrlInput] = useState("");
   const [context, setContext] = useState(savedState.context ?? "We are building Trackleaf GTM Radar. Help us identify customer pain, market gaps, and what to build next.");
+  const [analysisGoal, setAnalysisGoal] = useState<AnalysisGoal>(savedState.analysisGoal ?? "product");
   const [loading, setLoading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [job, setJob] = useState<CompetitorJobResponse | null>(savedState.job ?? null);
@@ -282,6 +294,7 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
   const [featureChoices, setFeatureChoices] = useState<Array<{ selected: boolean; item: FeatureSuggestion }>>([]);
   const [featureActionLoading, setFeatureActionLoading] = useState(false);
   const [featureActionError, setFeatureActionError] = useState<string | null>(null);
+  const [isPrinting, setIsPrinting] = useState(false);
 
   function getOrCreateUserId() {
     const existingUserId = localStorage.getItem(USER_ID_KEY);
@@ -301,6 +314,7 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
       JSON.stringify({
         urls,
         context,
+        analysisGoal,
         job,
         reviewsUrls,
         reviews,
@@ -312,7 +326,7 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
         actions,
       }),
     );
-  }, [urls, context, job, reviewsUrls, reviews, reviewsJob, reviewsPage, reviewsTotalPages, reviewsCompetitor, comparison, actions]);
+  }, [urls, context, analysisGoal, job, reviewsUrls, reviews, reviewsJob, reviewsPage, reviewsTotalPages, reviewsCompetitor, comparison, actions]);
 
   const competitorOptions = useMemo(() => {
     const map = new Map<string, string>();
@@ -347,7 +361,7 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
       if (body.status === "completed") {
         done = true;
         const suggestions = body.result?.featureSuggestions ?? [];
-        if (suggestions.length > 0) {
+        if (analysisGoal !== "gtm" && suggestions.length > 0) {
           setFeatureChoices(suggestions.map((item) => ({ selected: true, item })));
           setFeatureActionError(null);
           setFeatureModalOpen(true);
@@ -391,18 +405,30 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
     }
   }
 
+  function onDownloadPdf() {
+    setIsPrinting(true);
+    setTimeout(() => {
+      window.print();
+      setTimeout(() => setIsPrinting(false), 300);
+    }, 50);
+  }
+
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setLoading(true);
     setSubmitError(null);
     setJob(null);
+    setFeatureModalOpen(false);
 
     try {
       const userId = getOrCreateUserId();
+      const gtmContext = analysisGoal === "gtm"
+        ? `${context.trim()}\n\nGTM MODE: Focus on go-to-market strategy outputs. Prioritize ICP, positioning, messaging, pricing strategy hints, channel opportunities, acquisition motion, and launch recommendations based on competitor signals.`
+        : context.trim();
       const res = await fetch("/api/competitor-analysis", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId, urls, context: context.trim() || undefined }),
+        body: JSON.stringify({ userId, urls, context: gtmContext || undefined }),
       });
       const body = await res.json();
       if (!res.ok) {
@@ -621,6 +647,18 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
 
                 <form className="mt-6 grid gap-4" onSubmit={onSubmit}>
                   <label className="grid gap-1">
+                    <span className="text-sm font-medium">What should we build next for?</span>
+                    <select
+                      value={analysisGoal}
+                      onChange={(e) => setAnalysisGoal(e.target.value as AnalysisGoal)}
+                      className="rounded-lg border border-slate-300 bg-white p-3 text-sm outline-none focus:border-slate-500"
+                    >
+                      <option value="product">Product</option>
+                      <option value="gtm">GTM (Go-To-Market)</option>
+                    </select>
+                  </label>
+
+                  <label className="grid gap-1">
                     <span className="text-sm font-medium">Competitor URLs</span>
                     <div className="rounded-lg border border-slate-300 bg-white p-3">
                       <div className="mb-2 flex flex-wrap gap-2">
@@ -671,6 +709,21 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
                       {job.status}
                     </span>
                     <span className="text-sm text-slate-600">{job.progressMessage}</span>
+                    {job.result && !isPrinting && (
+                      <button
+                        type="button"
+                        onClick={onDownloadPdf}
+                        aria-label="Download as PDF"
+                        title="Download as PDF"
+                        className="ml-auto rounded-md border border-slate-300 bg-white p-2 text-slate-700 hover:bg-slate-50"
+                      >
+                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M12 3v11" />
+                          <path d="m7 10 5 5 5-5" />
+                          <path d="M5 21h14" />
+                        </svg>
+                      </button>
+                    )}
                   </div>
 
                   {job.metrics && (
@@ -691,17 +744,50 @@ export function TrackleafDashboard({ initialSection }: { initialSection: Section
                   {job.result && (
                     <div className="mt-6 grid gap-6">
                       <div>
-                        <h2 className="text-lg font-semibold">What We Should Build Next</h2>
-                        <p className="mt-1 text-sm text-slate-600">Recommended actions based on competitor gaps and opportunities.</p>
-                        <div className="mt-3 grid gap-3">
-                          {job.result.featureSuggestions.map((f, idx) => (
-                            <article key={`${f.feature}_${idx}`} className="rounded-lg border border-slate-200 p-4">
-                              <h3 className="font-semibold">{f.feature}</h3>
-                              <p className="mt-1 text-sm text-slate-700">{f.rationale}</p>
-                              <p className="mt-2 text-xs text-slate-500">Priority: {f.priority} | Inspiration: {f.inspiration}</p>
-                            </article>
-                          ))}
-                        </div>
+                        {analysisGoal === "gtm" ? (
+                          <>
+                            <h2 className="text-lg font-semibold">Go-To-Market Plan</h2>
+                            <p className="mt-1 text-sm text-slate-600">Structured GTM output based on competitor and market signals.</p>
+                            <div className="mt-3 grid gap-4">
+                              {[
+                                { title: "Target audience", items: job.result.gtmPlan?.targetAudience ?? [] },
+                                { title: "Value proposition", items: job.result.gtmPlan?.valueProposition ?? [] },
+                                { title: "Positioning & messaging", items: job.result.gtmPlan?.positioningAndMessaging ?? [] },
+                                { title: "Pricing", items: job.result.gtmPlan?.pricing ?? [] },
+                                { title: "Distribution channels", items: job.result.gtmPlan?.distributionChannels ?? [] },
+                                { title: "Customer acquisition", items: job.result.gtmPlan?.customerAcquisition ?? [] },
+                                { title: "Success metrics", items: job.result.gtmPlan?.successMetrics ?? [] },
+                              ].map((section) => (
+                                <article key={section.title} className="rounded-lg border border-slate-200 p-4">
+                                  <h3 className="font-semibold">{section.title}</h3>
+                                  {section.items.length > 0 ? (
+                                    <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700">
+                                      {section.items.map((item, idx) => (
+                                        <li key={`${section.title}_${idx}`}>{item}</li>
+                                      ))}
+                                    </ul>
+                                  ) : (
+                                    <p className="mt-2 text-sm text-slate-500">No signal found.</p>
+                                  )}
+                                </article>
+                              ))}
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <h2 className="text-lg font-semibold">What We Should Build Next</h2>
+                            <p className="mt-1 text-sm text-slate-600">Recommended actions based on competitor gaps and opportunities.</p>
+                            <div className="mt-3 grid gap-3">
+                              {job.result.featureSuggestions.map((f, idx) => (
+                                <article key={`${f.feature}_${idx}`} className="rounded-lg border border-slate-200 p-4">
+                                  <h3 className="font-semibold">{f.feature}</h3>
+                                  <p className="mt-1 text-sm text-slate-700">{f.rationale}</p>
+                                  <p className="mt-2 text-xs text-slate-500">Priority: {f.priority} | Inspiration: {f.inspiration}</p>
+                                </article>
+                              ))}
+                            </div>
+                          </>
+                        )}
                       </div>
 
                       <div>

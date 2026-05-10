@@ -21,3 +21,23 @@ body {
 button:not(:disabled) {
   cursor: pointer;
 }
+
+@media print {
+  aside,
+  button,
+  input,
+  textarea,
+  select {
+    display: none !important;
+  }
+
+  body {
+    background: #fff !important;
+  }
+
+  main,
+  section,
+  div {
+    box-shadow: none !important;
+  }
+}
